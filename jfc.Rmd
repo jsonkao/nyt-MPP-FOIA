@@ -1,0 +1,138 @@
+---
+title: "jesus fucking christ"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+```
+
+## MPP Courts
+
+```{r}
+lookup_hloc <- read.csv(file = "Lookup/tblLookupHloc.csv", sep = "\t") %>% 
+  filter(grepl("MPP", HEARING_LOC_NAME))
+lookup_hloc
+```
+
+# How long do people have to wait for their initial hearing?
+
+```{r}
+mpp_proceeding <- read.csv(file = "nyt_TblMPPProceeding.csv", sep = "\t") %>% 
+  mutate(
+    OSC_DATE = as.Date(OSC_DATE),
+    HEARING_DATE = as.Date(HEARING_DATE),
+  ) %>% 
+  filter(OSC_DATE >= "2019-01-29") %>% 
+  merge(
+    lookup_hloc %>% select(HEARING_LOC_CODE, HEARING_LOC_NAME),
+    by = "HEARING_LOC_CODE"
+  )
+
+# Charting OSC date vs Hearing date
+
+mpp_proceeding %>%
+  ggplot(aes(OSC_DATE, HEARING_DATE)) +
+  geom_point(alpha = 0.3) +
+  scale_x_date(date_breaks = "1 month", date_minor_breaks = "1 week", date_labels = "%b") +
+  scale_y_date(date_labels =  "%b %Y", limits = as.Date(c('2019-01-29','2020-01-23')), breaks = scales::pretty_breaks(n = 20)) +
+  xlab("Date DHS issued charging document") +
+  ylab("Initial hearing date") +
+  labs(color = "MPP Court") +
+  geom_segment(aes(x = as.Date("2019-01-29"), y = as.Date("2019-03-15"), xend = as.Date("2019-07-01"), yend = as.Date("2019-08-15")), color = "red") +
+  geom_label(aes(x = as.Date("2019-02-09"), y = as.Date("2019-03-15"), label = "45-day limit")) +
+  facet_wrap(~ HEARING_LOC_NAME)
+
+# Grouping by OSC date and Hearing date and counting
+
+mpp_count_dates <- mpp_proceeding %>% 
+  group_by(OSC_DATE, HEARING_DATE) %>%
+  mutate(n = n()) %>% 
+  distinct(OSC_DATE, HEARING_DATE, .keep_all = TRUE)
+
+mpp_count_dates %>% 
+  ggplot(aes(OSC_DATE, HEARING_DATE, size = n)) +
+  geom_point(alpha = 0.3) +
+  scale_x_date(date_labels =  "%m-%d", limits = as.Date(c('2019-01-29','2019-09-01')), breaks = scales::pretty_breaks(n = 20)) +
+  scale_y_date(date_labels =  "%b %d '%y", limits = as.Date(c('2019-01-29','2020-01-23')), breaks = scales::pretty_breaks(n = 20)) +
+  facet_wrap(~ HEARING_LOC_CODE) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))
+```
+
+# Where people came from
+
+```{r}
+mpp_cases <- read.csv(file = "nyt_A_TblCase_MPP.csv", sep = "\t") %>% 
+  mutate(
+    OSC_DATE = as.Date(OSC_DATE),
+    HEARING_DATE = as.Date(HEARING_DATE),
+  )
+
+mpp_cases %>%
+  group_by(DATE_DETAINED) %>% 
+  count() %>% 
+  filter(DATE_DETAINED != "") %>% 
+  arrange(-n) %>%
+  print(n = 4000)
+```
+
+# Why did El Paso diverge?
+
+FYI there are 806 NA hearing dates.
+```{r}
+enp_proceeding <- mpp_cases %>% 
+  filter(HEARING_LOC_CODE == "ENP")
+
+enp_proceeding %>% 
+  mutate(
+    HEARING_DATE = if_else(is.na(HEARING_DATE), as.Date("2019-02-01"), HEARING_DATE)
+  ) %>% 
+  ggplot(aes(OSC_DATE, HEARING_DATE)) +
+  geom_point(aes(color = IJ_CODE), alpha = 0.3)
+```
+
+# Doing stuff with multiple schedules (people who've waited for and gone to multiple hearings)
+
+```{r}
+mpp_sked <- read.csv(file = "nyt_tbl_mpp_schedule.csv", sep = "\t") %>% 
+  mutate(
+    ADJ_DATE = as.Date(ADJ_DATE),
+    OSC_DATE = as.Date(OSC_DATE),
+  )
+
+multi_waits <- mpp_sked %>% 
+  group_by(IDNCASE) %>% 
+  filter(n() > 1) %>% 
+  ungroup() %>% 
+  mutate(
+    wait_time = ADJ_DATE - OSC_DATE
+  )
+
+waits <- mpp_sked %>% 
+  group_by(IDNCASE) %>% 
+  filter(n() == 1) %>%
+  ungroup() %>% 
+  mutate(
+    wait_time = ADJ_DATE - OSC_DATE
+  )
+
+# wait times by court and judge... all seem to be going down
+waits %>% 
+  ggplot(aes(OSC_DATE, wait_time)) +
+  geom_point(alpha = 0.3) +
+  facet_wrap(~ HEARING_LOC_CODE)
+
+# average wait times by court... all seem to be going down
+waits %>% 
+  group_by(OSC_DATE, HEARING_LOC_CODE, IJ_CODE) %>%
+  summarize(
+    avg_wait = median(wait_time),
+  ) %>% 
+  ggplot(aes(OSC_DATE, avg_wait)) +
+  geom_col() +
+  facet_wrap(~ HEARING_LOC_CODE) +
+  xlab("Date the charge was issued") +
+  ylab("Average number of days until initial hearing")
+```
